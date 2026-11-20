@@ -1,48 +1,50 @@
-# 📊 Business Growth Analyzer (OLAP with Flask)
+# Web-OLAP — Business Growth Analyzer
 
-A Flask-based **OLAP (Online Analytical Processing) web application** that lets you upload Excel/CSV data, perform drill-down, roll-up, slice, and dice operations, and visualize business insights using Plotly.
+A Flask web app that turns an Excel or CSV file into OLAP-style analysis: upload your data, group and aggregate it, drill down into rows, and view the results as interactive Plotly charts.
 
-## 🚀 Features
-- Upload Excel/CSV file for analysis  
-- OLAP operations: **Drill-down, Roll-up, Slice, Dice**  
-- Interactive **charts and graphs** with Plotly.js  
-- Data processing using **Pandas & NumPy**  
-- Excel support via **OpenPyXL**  
-- Simple and clean Flask web interface  
+## What it does
 
-## 🛠️ Tech Stack
-- **Flask** → Web framework  
-- **Pandas & NumPy** → Data analysis and manipulation  
-- **OpenPyXL** → Excel file support  
-- **Plotly.js** → Interactive charting  
-- **Werkzeug** → WSGI utility for Flask  
+Upload a spreadsheet (sales data, purchases, or any tabular data) and the app detects numeric and date columns, shows a 10-row preview, and lets you aggregate a measure grouped by one or more dimensions, drill down into the underlying rows with filters, and see a time series grouped by month, quarter or year.
 
+## Features
 
-## 📂 How It Works
-1. Upload your Excel/CSV dataset  
-2. Flask backend processes data with Pandas  
-3. Apply OLAP operations (aggregation, filtering, drill-down)  
-4. Data is converted to JSON  
-5. Plotly.js renders interactive charts  
+- Upload Excel (`.xlsx`, `.xls`) or CSV files, up to 50 MB
+- Automatic detection of numeric and date columns
+- 10-row data preview after upload
+- Aggregation: group a measure by one or more dimensions (sum, count and other aggregations)
+- Drill-down: filter the original rows by column values (returns up to 1000 rows)
+- Time series: totals over time grouped by month, quarter or year, with sales and purchase columns picked up automatically when their names match
+- Interactive charts with Plotly.js: a 3D scatter chart for aggregated results and a time-series line chart
+- Sample dataset included (`sample_data.xlsx`) so you can try it without your own file
 
-## 📌 Use Cases
-- Sales & purchase trend analysis  
-- Profit/loss visualization  
-- Business intelligence for SMEs  
-- Data-driven decision making  
+## Tech stack
 
+- Flask — web framework
+- Pandas and NumPy — data loading and analysis
+- OpenPyXL — reading Excel files
+- Werkzeug — WSGI utilities and secure file uploads
+- Plotly.js 2.26.1 (CDN) — interactive charts
 
-## ▶️ Getting Started
+## How to run
 
-### Prerequisites
-Make sure you have Python 3.9+ installed.  
-Install the required dependencies:
+You need Python 3.9+.
+
 ```bash
 pip install -r requirements.txt
-
-Run the App
 python app.py
+```
 
+Then open http://127.0.0.1:5000/ in your browser.
 
-Then open http://127.0.0.1:5000/
-in your browser. ✅
+> Note: `app.py` looks for the page in a `templates/` folder and the stylesheet in a `static/` folder, so before running, move `index.html` into `templates/` and `style.css` into `static/`. The files are currently at the repo root.
+
+## Project structure
+
+```
+Web-OLAP/
+├── app.py             # Flask backend: upload, aggregate, drill-down, time series
+├── index.html         # Frontend: upload form, OLAP controls, Plotly charts
+├── style.css          # Frontend styling
+├── requirements.txt   # Flask, pandas, openpyxl, numpy, werkzeug
+└── sample_data.xlsx   # Sample dataset to try the app with
+```
