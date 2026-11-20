@@ -1,0 +1,419 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Business Growth Analyzer — Drill-down</title>
+  <link rel="stylesheet" href="/static/style.css" />
+  <script src="https://cdn.plot.ly/plotly-2.26.1.min.js"></script>
+  <style>
+    /* small inline styles for the ops bar so it shows nicely if you don't have a stylesheet */
+    #olap-ops { display: none; gap:8px; margin:10px 0; align-items:center }
+    #olap-ops button { padding:6px 10px; border-radius:6px; cursor:pointer }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <h1>Business Growth Analyzer</h1>
+      <p class="subtitle">Upload Excel/CSV → 3D OLAP + Growth charts + Drill-down</p>
+    </header>
+
+    <main>
+      <section class="card">
+        <h2>1. Upload file</h2>
+        <input id="fileInput" type="file" accept=".xlsx,.xls,.csv" />
+        <button id="uploadBtn" class="btn">Upload</button>
+        <div id="uploadMsg" class="muted"></div>
+        <div id="previewArea" class="preview"></div>
+      </section>
+
+      <section class="card" id="settingsCard" style="display:none">
+        <h2>2. OLAP Settings</h2>
+        <div class="row">
+          <label>Dimensions (choose up to 3)</label>
+          <select id="dim1"></select>
+          <select id="dim2"><option value="">(None)</option></select>
+          <select id="dim3"><option value="">(None)</option></select>
+        </div>
+        <div class="row">
+          <label>Measure (numeric)</label>
+          <select id="measure"></select>
+          <label>Agg</label>
+          <select id="agg">
+            <option value="sum">sum</option>
+            <option value="mean">mean</option>
+            <option value="count">count</option>
+            <option value="min">min</option>
+            <option value="max">max</option>
+          </select>
+        </div>
+        <div class="row">
+          <label>Date column (optional)</label>
+          <select id="datecol"><option value="">(None)</option></select>
+          <label>Time granularity</label>
+          <select id="tgran">
+            <option>Month</option>
+            <option>Quarter</option>
+            <option>Year</option>
+          </select>
+        </div>
+        <button id="runBtn" class="btn primary">Build OLAP & Charts</button>
+        <div id="aggMsg" class="muted"></div>
+      </section>
+
+      <section class="card" id="resultsCard" style="display:none">
+        <h2>Results</h2>
+
+        <!-- OLAP ops bar (slice, dice, pivot) placed just above the 3D view -->
+        <div id="olap-ops">
+          <span>OLAP Ops:</span>
+          <button id="btnSlice">Slice</button>
+          <button id="btnDice">Dice</button>
+          <button id="btnPivot">Pivot</button>
+        </div>
+
+        <div id="pivotTable" class="tablewrap"></div>
+        <div id="plot3d"></div>
+        <div id="timeseries"></div>
+        <div id="drilldown" class="card" style="display:none; margin-top:12px"></div>
+      </section>
+    </main>
+
+    <footer class="muted">Made with ❤️ — click a 3D point to see raw rows (drill-down)</footer>
+  </div>
+
+  <script>
+    // -------------------- Core page logic --------------------
+    let currentFilename = null;
+    let lastPivot = null;
+    const fileInput = document.getElementById('fileInput');
+    const uploadBtn = document.getElementById('uploadBtn');
+    const uploadMsg = document.getElementById('uploadMsg');
+    const previewArea = document.getElementById('previewArea');
+    const settingsCard = document.getElementById('settingsCard');
+    const resultsCard = document.getElementById('resultsCard');
+    const dim1 = document.getElementById('dim1');
+    const dim2 = document.getElementById('dim2');
+    const dim3 = document.getElementById('dim3');
+    const measure = document.getElementById('measure');
+    const agg = document.getElementById('agg');
+    const datecol = document.getElementById('datecol');
+    const tgran = document.getElementById('tgran');
+    const runBtn = document.getElementById('runBtn');
+    const pivotTable = document.getElementById('pivotTable');
+    const plot3d = document.getElementById('plot3d');
+    const timeseries = document.getElementById('timeseries');
+    const aggMsg = document.getElementById('aggMsg');
+    const drilldownDiv = document.getElementById('drilldown');
+
+    uploadBtn.addEventListener('click', async () => {
+      if (!fileInput.files.length) { alert('Choose a file first'); return; }
+      const f = fileInput.files[0];
+      const fd = new FormData();
+      fd.append('file', f);
+      uploadMsg.textContent = 'Uploading...';
+      try {
+        const res = await fetch('/upload', { method: 'POST', body: fd });
+        const data = await res.json();
+        if (!res.ok) { uploadMsg.textContent = 'Error: ' + (data.error || res.status); return; }
+        uploadMsg.textContent = 'Uploaded: ' + data.filename;
+        currentFilename = data.filename;
+        // populate preview and selectors
+        previewArea.innerHTML = '<strong>Columns:</strong> ' + data.columns.join(', ') + '<br/><br/>' + '<strong>Preview (first rows):</strong>';
+        // render preview table
+        if (data.preview && data.preview.length) {
+          const tbl = document.createElement('table');
+          tbl.className = 'preview-table';
+          const cols = Object.keys(data.preview[0]);
+          const thead = document.createElement('thead'); const htr = document.createElement('tr');
+          cols.forEach(c=>{ const th=document.createElement('th'); th.textContent=c; htr.appendChild(th); }); thead.appendChild(htr); tbl.appendChild(thead);
+          const tbody = document.createElement('tbody');
+          data.preview.forEach(row=>{ const tr=document.createElement('tr'); cols.forEach(c=>{ const td=document.createElement('td'); td.textContent=row[c]; tr.appendChild(td); }); tbody.appendChild(tr); });
+          tbl.appendChild(tbody);
+          previewArea.appendChild(tbl);
+        }
+        // populate selectors
+        const cols = data.columns;
+        function populate(sel, includeNone=false){
+          sel.innerHTML = includeNone ? '<option value="">(None)</option>' : '';
+          cols.forEach(c=>{ const o=document.createElement('option'); o.value=c; o.textContent=c; sel.appendChild(o); });
+        }
+        populate(dim1); populate(dim2,true); populate(dim3,true); populate(measure); populate(datecol,true);
+        settingsCard.style.display = 'block';
+        resultsCard.style.display = 'none';
+        aggMsg.textContent = '';
+      } catch (err) {
+        uploadMsg.textContent = 'Upload failed: ' + err;
+      }
+    });
+
+    runBtn.addEventListener('click', async () => {
+      if (!currentFilename) { alert('Upload a file first'); return; }
+      const dims = [dim1.value, dim2.value, dim3.value].filter(x=>x).slice(0,3);
+      if (dims.length===0){ alert('Choose at least one dimension'); return; }
+      if (!measure.value){ alert('Choose a measure'); return; }
+      const form = new FormData();
+      form.append('filename', currentFilename);
+      form.append('dimensions', dims.join(','));
+      form.append('measure', measure.value);
+      form.append('agg', agg.value);
+      if (datecol.value) form.append('date_column', datecol.value);
+      form.append('time_granularity', tgran.value);
+
+      aggMsg.textContent = 'Running aggregation...';
+      try {
+        const res = await fetch('/aggregate', { method: 'POST', body: form });
+        const data = await res.json();
+        if (!res.ok){ aggMsg.textContent = 'Error: ' + (data.error || res.status); return; }
+        aggMsg.textContent = 'Aggregation completed';
+        lastPivot = data;
+        // render pivot table
+        pivotTable.innerHTML = '';
+        if (data.pivot && data.pivot.length){
+          const tbl = document.createElement('table'); tbl.className='pivot-table';
+          const cols = Object.keys(data.pivot[0]);
+          const thead=document.createElement('thead'); const htr=document.createElement('tr');
+          cols.forEach(c=>{ const th=document.createElement('th'); th.textContent=c; htr.appendChild(th); }); thead.appendChild(htr); tbl.appendChild(thead);
+          const tbody=document.createElement('tbody');
+          data.pivot.forEach(row=>{ const tr=document.createElement('tr'); cols.forEach(c=>{ const td=document.createElement('td'); td.textContent=row[c]; tr.appendChild(td); }); tbody.appendChild(tr); });
+          tbl.appendChild(tbody);
+          pivotTable.appendChild(tbl);
+        } else { pivotTable.innerHTML = '<em>No pivot results</em>'; }
+
+        // 3D plot with click handler for drilldown
+        plot3d.innerHTML = '';
+        try{
+          const dimsForPlot = Object.keys(data.pivot[0]).filter(k=>k!==data.measure_col).slice(0,3);
+          const x = data.pivot.map(r=>r[dimsForPlot[0]]);
+          const y = data.pivot.map(r=>dimsForPlot[1]? r[dimsForPlot[1]]: r[dimsForPlot[0]]);
+          const z = data.pivot.map(r=>dimsForPlot[2]? r[dimsForPlot[2]]: data.pivot.map((_,i)=>i));
+          const sizes = data.pivot.map(r=> Number(r[data.measure_col] || 0));
+          const textvals = data.pivot.map(r=> {
+            const obj = {};
+            dimsForPlot.forEach(d=> obj[d]=r[d]);
+            return JSON.stringify(obj);
+          });
+          const trace = {
+            x, y, z, mode:'markers', marker:{ size: sizes.map(s=> Math.max(6, Math.sqrt(s||0))) , color: sizes},
+            text: textvals,
+            type:'scatter3d'
+          };
+          const layout = {margin:{l:0,r:0,b:0,t:30}, height:450};
+          Plotly.newPlot('plot3d',[trace], layout);
+
+          const plotDiv = document.getElementById('plot3d');
+          plotDiv.on('plotly_click', async function(eventData){
+            try{
+              const pt = eventData.points[0];
+              const jsonText = pt.data.text[pt.pointIndex];
+              const filters = JSON.parse(jsonText);
+              // call drilldown endpoint
+              const dr = await fetch('/drilldown', {
+                method:'POST',
+                headers: {'Content-Type':'application/json'},
+                body: JSON.stringify({filters})
+              });
+              const rows = await dr.json();
+              renderDrilldown(rows, filters);
+            }catch(err){
+              console.error('drill error', err);
+            }
+          });
+        }catch(e){ plot3d.innerHTML = '<div class="muted">Could not render 3D plot: '+e+'</div>'; }
+
+        // timeseries
+        timeseries.innerHTML='';
+        if (data.timeseries && data.timeseries.length){
+          const ts = data.timeseries;
+          const metrics = Object.keys(ts[0]).filter(k=>k!=='period');
+          const traces = metrics.map(m=> ({ x: ts.map(t=>t.period), y: ts.map(t=>t[m]), mode:'lines+markers', name:m }));
+          const layout = {height:360, title:'Growth Over Time'};
+          const div = document.createElement('div'); div.id='tsplot'; timeseries.appendChild(div);
+          Plotly.newPlot(div, traces, layout);
+        } else if (data.timeseries_error){ timeseries.innerHTML = '<div class="muted">Timeseries error: '+data.timeseries_error+'</div>'; }
+        resultsCard.style.display='block';
+        drilldownDiv.style.display='none';
+
+        // show ops bar now that a chart exists
+        const opsBar = document.getElementById('olap-ops');
+        if (opsBar) opsBar.style.display = 'flex';
+
+      } catch(err){
+        aggMsg.textContent = 'Aggregation failed: '+err;
+      }
+    });
+
+    function renderDrilldown(rows, filters){
+      drilldownDiv.style.display='block';
+      drilldownDiv.innerHTML = '<h3>Drill-down rows (filters: '+ JSON.stringify(filters) +')</h3>';
+      if (!rows || rows.length===0){ drilldownDiv.innerHTML += '<div class="muted">No rows found</div>'; return; }
+      const tbl = document.createElement('table'); tbl.className='pivot-table';
+      const cols = Object.keys(rows[0]);
+      const thead = document.createElement('thead'); const htr = document.createElement('tr');
+      cols.forEach(c=>{ const th=document.createElement('th'); th.textContent=c; htr.appendChild(th); }); thead.appendChild(htr); tbl.appendChild(thead);
+      const tbody = document.createElement('tbody');
+      rows.forEach(r=>{ const tr=document.createElement('tr'); cols.forEach(c=>{ const td=document.createElement('td'); td.textContent=r[c]; tr.appendChild(td); }); tbody.appendChild(tr); });
+      tbl.appendChild(tbody);
+      drilldownDiv.appendChild(tbl);
+    }
+
+    // -------------------- OLAP Ops (client-side) --------------------
+    (function () {
+      const opsBar = document.getElementById('olap-ops');
+      const btnSlice = document.getElementById('btnSlice');
+      const btnDice  = document.getElementById('btnDice');
+      const btnPivot = document.getElementById('btnPivot');
+      const gd = document.getElementById('plot3d');
+
+      // Keep the very first full figure so we can filter/pivot safely
+      let base = null;           // { traces: [trace0,...], layoutTitles: {x,y} }
+      let pivotState = 0;        // 0 = normal, 1 = swapped
+
+      // Deep-ish clone for arrays in a trace
+      function cloneTrace(t) {
+        const c = {};
+        for (const k in t) {
+          const v = t[k];
+          if (Array.isArray(v)) c[k] = v.slice();
+          else if (v && typeof v === 'object') c[k] = JSON.parse(JSON.stringify(v));
+          else c[k] = v;
+        }
+        return c;
+      }
+
+      // Snapshot the first rendered figure once
+      function captureBaseIfNeeded() {
+        if (!gd) return;
+        // If plotly hasn't rendered scene layout yet, gd.data may be empty
+        if (!gd.data || !gd.data.length) return;
+        if (base) return;
+        base = {
+          traces: gd.data.map(cloneTrace),
+          layoutTitles: {
+            x: (gd.layout && gd.layout.scene && gd.layout.scene.xaxis && (gd.layout.scene.xaxis.title && gd.layout.scene.xaxis.title.text)) || 'X',
+            y: (gd.layout && gd.layout.scene && gd.layout.scene.yaxis && (gd.layout.scene.yaxis.title && gd.layout.scene.yaxis.title.text)) || 'Y'
+          }
+        };
+      }
+
+      // Show ops bar once a chart exists (after file import + build)
+      function showOpsWhenReady() {
+        if (!gd) return;
+        if (gd.data && gd.data.length) {
+          captureBaseIfNeeded();
+          if (opsBar) opsBar.style.display = 'flex';
+        }
+      }
+
+      // Re-render with given traces, keep layout (drilldown click handlers remain)
+      function renderTraces(newTraces) {
+        Plotly.react(gd, newTraces, gd.layout);
+      }
+
+      // Build a filtered copy of current traces using a point predicate
+      function filterCurrentTraces(predicate) {
+        const traces = gd.data.map((t) => {
+          const n = (t.x || []).length;
+          const idxs = [];
+          for (let i = 0; i < n; i++) {
+            if (predicate(t, i)) idxs.push(i);
+          }
+          const out = cloneTrace(t);
+          // filter every point-wise array to keep indices aligned
+          Object.keys(out).forEach((k) => {
+            const v = out[k];
+            if (Array.isArray(v) && v.length === n) {
+              out[k] = idxs.map(i => v[i]);
+            }
+          });
+          return out;
+        });
+        renderTraces(traces);
+      }
+
+      // Helpers to get unique values from a trace field
+      function uniq(arr) { return Array.from(new Set(arr || [])); }
+
+      // --- Operations ---
+      function doSlice() {
+        if (!gd || !gd.data || !gd.data.length) return;
+        const t = gd.data[0];
+        const axisInput = prompt("Slice on which dimension? Enter 'x' or 'y'");
+        if (!axisInput) return;
+        const axis = axisInput.trim().toLowerCase();
+        if (axis !== 'x' && axis !== 'y') return;
+
+        const choices = uniq(t[axis]);
+        const val = prompt(`Enter a value to keep from ${axis.toUpperCase()}:\n${choices.join(', ')}`);
+        if (val == null || val === '') return;
+
+        filterCurrentTraces((_t, i) => String(_t[axis][i]) === String(val));
+      }
+
+      function doDice() {
+        if (!gd || !gd.data || !gd.data.length) return;
+        const t = gd.data[0];
+        // X values (comma sep). Leave blank to ignore axis
+        const xChoices = uniq(t.x).join(', ');
+        const xIn = prompt(`Dice — X values to keep (comma-separated).\nAvailable: ${xChoices}\n(Leave blank to ignore X)`, '');
+        const xSet = new Set((xIn || '').split(',').map(s => s.trim()).filter(Boolean));
+
+        // Y values
+        const yChoices = uniq(t.y).join(', ');
+        const yIn = prompt(`Dice — Y values to keep (comma-separated).\nAvailable: ${yChoices}\n(Leave blank to ignore Y)`, '');
+        const ySet = new Set((yIn || '').split(',').map(s => s.trim()).filter(Boolean));
+
+        // Optional Z range (numeric)
+        const zMinStr = prompt("Dice — Z min (numeric, leave blank for no min)", '');
+        const zMaxStr = prompt("Dice — Z max (numeric, leave blank for no max)", '');
+        const zMin = zMinStr === '' ? -Infinity : Number(zMinStr);
+        const zMax = zMaxStr === '' ?  Infinity : Number(zMaxStr);
+
+        filterCurrentTraces((_t, i) => {
+          const keepX = xSet.size ? xSet.has(String(_t.x[i])) : true;
+          const keepY = ySet.size ? ySet.has(String(_t.y[i])) : true;
+          const zVal = Number(_t.z[i]);
+          const keepZ = (!Number.isNaN(zVal)) ? (zVal >= zMin && zVal <= zMax) : true;
+          return keepX && keepY && keepZ;
+        });
+      }
+
+      function doPivot() {
+        if (!gd || !gd.data || !gd.data.length) return;
+        // swap x<->y for every trace
+        const traces = gd.data.map((t) => {
+          const out = cloneTrace(t);
+          out.x = t.y.slice();
+          out.y = t.x.slice();
+          return out;
+        });
+
+        // swap axis titles if present
+        const lx = (gd.layout && gd.layout.scene && gd.layout.scene.xaxis && (gd.layout.scene.xaxis.title && gd.layout.scene.xaxis.title.text)) || base?.layoutTitles?.x || 'X';
+        const ly = (gd.layout && gd.layout.scene && gd.layout.scene.yaxis && (gd.layout.scene.yaxis.title && gd.layout.scene.yaxis.title.text)) || base?.layoutTitles?.y || 'Y';
+        const newLayout = JSON.parse(JSON.stringify(gd.layout || {}));
+        newLayout.scene = newLayout.scene || {};
+        newLayout.scene.xaxis = newLayout.scene.xaxis || {};
+        newLayout.scene.yaxis = newLayout.scene.yaxis || {};
+        newLayout.scene.xaxis.title = { text: ly };
+        newLayout.scene.yaxis.title = { text: lx };
+
+        Plotly.react(gd, traces, newLayout);
+        pivotState ^= 1; // toggle (click again to swap back)
+      }
+
+      // Wire buttons
+      if (btnSlice) btnSlice.addEventListener('click', doSlice);
+      if (btnDice)  btnDice.addEventListener('click',  doDice);
+      if (btnPivot) btnPivot.addEventListener('click', doPivot);
+
+      // Auto-show ops after the chart exists (post import/build) without touching your flow
+      const observer = new MutationObserver(showOpsWhenReady);
+      if (gd) observer.observe(gd, { childList: true, subtree: true });
+      // also run a light check just in case
+      setInterval(showOpsWhenReady, 800);
+    })();
+  </script>
+</body>
+</html>
