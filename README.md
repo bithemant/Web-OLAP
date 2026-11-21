@@ -36,15 +36,15 @@ python app.py
 
 Then open http://127.0.0.1:5000/ in your browser.
 
-> Note: `app.py` looks for the page in a `templates/` folder and the stylesheet in a `static/` folder, so before running, move `index.html` into `templates/` and `style.css` into `static/`. The files are currently at the repo root.
-
 ## Project structure
 
 ```
 Web-OLAP/
 ├── app.py             # Flask backend: upload, aggregate, drill-down, time series
-├── index.html         # Frontend: upload form, OLAP controls, Plotly charts
-├── style.css          # Frontend styling
+├── templates/
+│   └── index.html     # Frontend: upload form, OLAP controls, Plotly charts
+├── static/
+│   └── style.css      # Frontend styling
 ├── requirements.txt   # Flask, pandas, openpyxl, numpy, werkzeug
 └── sample_data.xlsx   # Sample dataset to try the app with
 ```
